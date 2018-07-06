@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="revealjs/css/reveal.css" />
+    <link rel="stylesheet" href="revealjs/css/theme/black.css" />
+    <link rel="stylesheet" href="highlightjs/styles/atom-one-dark.css" />
+    <title>Kafka</title>
+    <style>
+      pre small {
+        width: 100%;
+      }
+      ul ul {
+        font-size: smaller !important;
+      }
+    </style>
+
+    <script>
+      // enable pdf export
+      var link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.type = 'text/css';
+      link.href = window.location.search.match(/print-pdf/gi) ? 'css/print/pdf.css' : 'css/print/paper.css';
+      document.getElementsByTagName('head')[0].appendChild(link);
+
+      document.addEventListener('DOMContentLoaded', function() {
+        var codeBlocks = document.getElementsByTagName('code');
+        for (var i = 0; i < codeBlocks.length; i++) {
+          var lines = codeBlocks[i].textContent.replace(/^[\r\n]+|[\r\n]+$/g, '').split('\n');
+          var start = 0;
+          for (var j = 0; j < lines[0].length; j++) {
+            if (lines[0][j] === ' ' || lines[0][j] === '\t') {
+              start++;
+            } else {
+              break;
+            }
+          }
+
+          for (var j = 0; j < lines.length; j++) {
+            if (lines[j].trim() !== '') {
+              lines[j] = lines[j].substring(start);
+            }
+          }
+          codeBlocks[i].textContent = lines.join('\n');
+          hljs.highlightBlock(codeBlocks[i]);
+        }
+      }, false);
+    </script>
+  </head>
+  <body>
+    <div class="reveal">
+      <div class="slides">
+        <section>
+          <h1>Apache Kafka</h1>
+          <h2>0.11.0</h2>
+          <hr />
+          <h5>Benjamin Billet</h5>
+        </section>
+        
+        <section>
+          <h3>Publish/Subscribe Messaging</h3>
+          <ul>
+            <li class="fragment"><strong>Publishers</strong> write messages into a pub/sub system.</li>
+            <li class="fragment">The pub/sub system <strong>classifies</strong> these messages somehow (e.g., topic-based, content-based).</li>
+            <li class="fragment"><strong>Subscribers</strong> express their interests in some class of messages.</li>
+            <li class="fragment"><strong>Brokers</strong> are servers that manage communication between subscribers and publishers.</li>
+          </ul>
+          <aside class="notes">
+            <p>Topic-based: messages are published into named logical channels (topics). Subscribers register to some topics and receive all messages published to these topics.</p>
+            <p>Content-based: subscribers express constraints that messages must match (e.g., attributes matching or pattern matching for the messages content) and the pub/sub system will classify the messages according to these constraints.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Kafka Basics</h3>
+          <ul>
+            <li class="fragment">A message is composed of a <strong>key</strong> (optional) and a <strong>value</strong>.</li>
+            <li class="fragment">A <strong>topic</strong> is divided into several <strong>partitions</strong>.</li>
+            <li class="fragment">A partition is an <strong>append-only queue</strong> of messages with order guarantees.
+              <ul>
+                <li class="fragment">Every message in a partition has a unique <strong>offset</strong>; a number that represents its position in the queue.</li>
+              </ul>
+            </li>
+          </ul>
+          <aside class="notes">
+            <p>Keys and values are byte array (content-agnostic).</p>
+            <p>Order is guaranteed in a partition (if a message A is written before a message B in a partition P, then the message A will be read before the message B by the consumers of partition P). Order is not guaranteed between partitions.</p>
+            <p>A partition can be replicated (leader/follower architecture).</p>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Kafka Basics</h3>
+          <ul>
+            <li class="fragment">A <strong>producer</strong> publishes messages at the end of a partition.
+              <ul>
+                <li class="fragment">Messages are written in <strong>batches</strong>.</li>
+              </ul>
+            </li>
+            <li class="fragment">A <strong>consumer</strong> reads message after a given offset.</li>
+            <li class="fragment">Consumers belong to a <strong>consumer group</strong>:
+              <ul>
+                <li class="fragment">Partitions are <strong>balanced</strong> between all the consumers of a consumer group; each partition is read by one consumer.</li>
+              </ul>
+            </li>
+          </ul>
+          <aside class="notes">
+            <p>A producer accumulates messages into a batch of record and send it according to a configurable size/time threshold</p>
+            <p>A producer can write to a specific partition or use a partitionner. The default partitionner works as follow:</p>
+            <ul>
+              <li>If no key is specified, the partitionner will balance the messages between partitions (round-robin)</li>
+              <li>If a key is specified, the partitionner hash the key and use the result to map the message to a partition (a message is guaranteed to be written to the same partition, except if new partitions are added to the topic)</li>
+            </ul>
+            <p>Consumers must keep tracks of which messages they consumed (in case of incident, they are responsible for restarting consuming at the "righ" offset for avoiding duplicate readings)</p>
+            <p>In a consumer group, two consumers cannot read the same partition. Kakfa balance the partitions between the members of the consumer group (if there is only one consumer, it will read all partitions of the topic).</p>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Kafka Cluster Architecture</h3>
+          <ul>
+            <li class="fragment">A Kafka cluster is composed of <strong>brokers</strong>.</li>
+            <li class="fragment">One of the broker is elected as the <strong>controller</strong>.
+              <ul>
+                <li class="fragment">If the controller disappears, the cluster becomes unavailable while a new controller is <strong>elected</strong>.</li>
+                <li class="fragment">When a broker left the cluster, the controller <strong>reassigns</strong> the orphan partitions, by following a list of <strong>replicas</strong>.</li>
+                <li class="fragment">When a broker join the cluster, the controller <strong>does not reassign</strong> existing partitions automatically.</li>
+              </ul>
+            </li>
+          </ul>
+          <aside class="notes">
+            <p>Topological aspects of the cluster (list of brokers and associated partitions) are stored in Zookeeper:</p>
+            <ul>
+              <li>The controller (the first broker to join the cluster) creates a Zookeeper ephemeral node (a node that disappears when its creator loses connectivity to the Zookeeper ensemble) with a predefined name. Every other broker will watch this node.</li>
+              <li>When a broker detects that the ephemeral node is gone, it tries to create the ephemeral node. The first broker to succeed becomes the controller. Other brokers fail (node already exists) and recreate their watch to the ephemeral node.</li>
+              <li>For avoiding split brain scenario (two brokers that believes they are the controller), each new controller receives an ever-increasing number (epoch number). Other brokers, by knowing the current number, will ignore messages from an old controller.</li>
+            </ul>
+            <p>The controller assigns partition by trying to:</p>
+            <ul>
+              <li>Spread replicas evenly among brokers</li>
+              <li>For the same partition, keep each replica on different brokers.</li>
+              <li>For the same partition, keep each replica on different racks (if the brokers are rackaware).</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Kafka Cluster Architecture</h3>
+          <ul>
+            <li class="fragment">A partition can have multiple <strong>replicas</strong> stored on other brokers: one <strong>leader replica</strong> and some <strong>follower replicas</strong>.
+              <ul>
+                <li class="fragment">Producers/consumers request leader replicas of partitions.</li>
+                <li class="fragment">A follower replica is said <strong>in-sync</strong> if it can follow the leader.</li>
+                <li class="fragment">Only messages written to all in-sync replicas (<strong>committed messages</strong>) are available to consumers.</li>
+              </ul>
+            </li>
+          </ul>
+          <aside class="notes">
+            <p>A follower replica is considered in-sync if:</p>
+            <ul>
+              <li>it has an active session with Zookeeper (heartbeats sent in the last 6 seconds)</li>
+              <li>it fetched a message from the leader in the last 10 minutes</li>
+              <li>it fetched the most recent message from the leader in the last 10 seconds</li>
+            </ul>
+            <p>If an out of sync replicas reconnects to Zookeeper and catches up the messages of the leader, it is considered in-sync again.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Writing Messages</h3>
+          <ul>
+            <li class="fragment"><strong>Records</strong> represent messages: topic name, partition number (optional), key (optional), value.</li>
+            <li class="fragment"><strong>Serializers</strong> convert the key and value into byte arrays.</li>
+            <li class="fragment"><strong>Partitionner</strong> maps a message to a partition.</li>
+          </ul>
+          <img src="media/writing-messages.png" alt="writing-messages-schema" />
+          <aside class="notes">
+            <p>Keys and values are byte arrays.</p>
+            <p>A producer accumulates messages into a batch of record and send it according to a configurable size/time threshold</p>
+            <p>A producer has a send buffer ; if messages are produced faster than the producer can send them, the producer throws exception or blocks when the buffer is full</p>
+            <p>key.serializer, value.serializer. Kafka have some built-in implementations (StringSerializer, ByteArraySerializer, IntegerSerializer)</p>
+            <p>A producer can write to a specific partition or use a partitionner. The default partitionner behaves as follow:</p>
+            <ul>
+              <li>If no key is specified, the partitionner will balance the messages between partitions (round-robin)</li>
+              <li>If a key is specified, the partitionner hash the key and use the result to map the message to a partition (a message is guaranteed to be written to the same partition, except if new partitions are added to the topic)</li>
+            </ul>
+            <p>You can write your own implementations for serializers and partitionners</p>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Writing Messages</h3>
+          <ul>
+            <li class="fragment">Producers use different <strong>send()</strong> behaviors:
+              <ul>
+                <li>Fire-and-forget, synchronous send, asynchronous send.</li>
+              </ul>
+            </li>
+            <li class="fragment">Producers encounter <strong>retriable</strong> or <strong>non-retriable</strong> errors.</li>
+            <li class="fragment">Producers can wait for <strong>acknowledgements</strong>:
+              <ul>
+                <li>acks=0, acks=1, acks=all.</li>
+              </ul>
+            </li>
+          </ul>
+          <img src="media/writing-messages.png" alt="writing-messages-schema" />
+          <aside class="notes">
+            <p>The send() method can receive a callback (asynchronous send) that is called when the kafka broker respond (with success or error). The send() method returns a Future object, that can be used for blocking the current thread (Future#get) until the broker respond. By ignoring this future, it’s easy to implement the fire-and-forget behavior.</p>
+            <p>Example of retriable errors : connection errors, no leader available, etc.</p>
+            <p>Example of non-retriable errors : message size too large, misconfiguration, etc.</p>
+            <p>In case of retriable errors, the producer will retry automatically and will fail after a configurable number of retry. In case of retry, order is not guaranteed except if the number of in-flight request is limited to 1 (in.flight.requests.per.session=1)</p>
+            <p>Acknowledgements are sent after a given number of partition replicas received the record:</p>
+            <ul>
+              <li>acks=0 : no ACK (only producer-side exceptions will be thrown). It has very high throughput</li>
+              <li>acks=1 : ACK is sent when the message is stored by the partition leader (but not flushed to disk)</li>
+              <li>acks=all : ACK is sent when the message is stored by all in-sync replicas (but not flushed to disk)</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Writing Messages</h3>
+          <pre><small><code class="java">
+            // create a producer with a configuration
+            Properties props = new Properties();
+            props.put("bootstrap.servers", "myBroker1:9092,myBroker2:9092");
+            props.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+            props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+            KafkaProducer&lt;String, String&gt; producer = new KafkaProducer&lt;&gt;(props);
+            
+            // create and send a record
+            ProducerRecord&lt;String, String&gt; record = new ProducerRecord&lt;&gt;("aTopic", "aKey", "aValue");
+            try {
+              Future&lt;RecordMetadata&gt; f = producer.send(record);
+              RecordMetadata metadata = f.get(); // synchronous
+            } catch (Exception e) {
+              ...
+            }
+          </code></small></pre>
+          <aside class="notes">
+            <p>The bootstrap.servers are used by the producer to establish initial connection to the Kafka cluster. At least two should be provided, in case one broker goes down.</p>
+            <p>RecordMetadata = topic name, partition number, offset, timestamp</p>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Reading Messages</h3>
+          <ul>
+            <li class="fragment">Each partition is read by one consumer.
+              <ul>
+                <li>They can be <strong>rebalanced</strong>.</li>
+              </ul>
+            </li>
+          </ul>
+          <img src="media/reading-messages.png" alt="reading-messages-schema" />
+          <aside class="notes">
+            <p>In a consumer group, two consumers cannot read the same partition. Kakfa balance the partitions between the members of the consumer group (if there is only one consumers, it will read all partitions of the topic).</p>
+            <p>Rebalance occurs when:</p>
+            <ul>
+              <li>a consumer leaves/joins the group (except if all partition are associated)</li>
+              <li>partitions are added to a topic</li>
+            </ul>
+            <p>Rebalance implies unavailability of the consumer group.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Reading Messages</h3>
+          <ul>
+            <li class="fragment">In a consumer group, the first consumer to join becomes the <strong>group leader</strong>.
+              <ul>
+                <li>The group leader is responsible of partition assignement using a <strong>partition assignor</strong>.</li>
+              </ul>
+            </li>
+            <li class="fragment">Consumers keep tracks of the message they consumed by <strong>commiting</strong> the corresponding offset.</li>
+            <li class="fragment">Consumers send <strong>heartbeats</strong> to the group leader to signal they are alive.</li>
+          </ul>
+          <aside class="notes">
+            <p>Consumers must keep tracks of which messages they consumed. Kafka provides a specific "__consumer_offsets" topic with the committed offset for each partition. When rebalance occurs, the consumers will read from the last committed message. To do so, each consumer can define listeners to know when a rebalance occurs.</p>
+            <p>After 3 seconds (configurable) without hearbeats, the consumer will be considered dead and a rebalance will occur.</p>
+            <p>Kafka provides two partition assignor (you can implement a custom assignor):</p>
+            <ul>
+              <li>range: assigns to each consumer a consecutive subset of partitions</li>
+              <li>round-robin: assigns partitions to consumer sequentially, one after another</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Reading Messages</h3>
+          <pre><small><code class="java">
+            // create a consumer with a configuration
+            Properties props = new Properties();
+            props.put("bootstrap.servers", "myBroker1:9092,myBroker2:9092");
+            props.put("group.id", "aGroup");
+            props.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+            props.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+            KafkaConsumer&lt;String, String&gt; consumer = new KafkaConsumer&lt;&gt;(props);
+
+            // subscribe to one topic
+            consumer.subscribe(Collections.singletonList("aTopic"));
+          </code></small></pre>
+        </section>
+
+        <section>
+          <h3>Reading Messages</h3>
+          <pre><small><code class="java">
+            Map&lt;String, Long&gt; countMap = new HashMap&lt;&gt;();
+            try {
+              while (true) {
+                // read
+                ConsumerRecords&lt;String, String&gt; records = consumer.poll(100); // 100=timeout interval
+                for (ConsumerRecord&lt;String, String&gt; record : records) {
+                  int updatedCount = 1;
+                  if (countMap.countainsValue(record.value())) {
+                    updatedCount = countMap.get(record.value()) + 1;
+                  }
+                  countMap.put(record.value(), updatedCount)
+                }
+              }
+            } finally {
+              consumer.close();
+            }              
+          </code></small></pre>
+          <aside class="notes">
+            <p>The first time poll() is called with a new consumer, the consumer looks for the group coordinator, joins the consumer group and receives a partition assignment.</p>
+            <p>Before 0.10.1, heartbeats are sent when poll() is called. After 3 seconds without hearbeats, the consumer will be considered dead and a rebalance will occur.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Reading Messages</h3>
+          <pre><small><code class="java">
+            Map&lt;String, Long&gt; countMap = new HashMap&lt;&gt;();
+            try {
+              while (true) {
+                // read 
+                ConsumerRecords&lt;String, String&gt; records = consumer.poll(100); // 100=timeout interval
+                for (ConsumerRecord&lt;String, String&gt; record : records) {
+                  int updatedCount = 1;
+                  if (countMap.countainsValue(record.value())) {
+                    updatedCount = countMap.get(record.value()) + 1;
+                  }
+                  countMap.put(record.value(), updatedCount)
+                }
+                try {
+                  consumer.commitSync();
+                } catch (CommitFailedException e) { ... }
+              }
+            } finally {
+              consumer.close();
+            }              
+          </code></small></pre>
+          <aside class="notes">
+            <p>Commit consists into storing the offset of the last successfully processed batch of messages (it is also possible to commit a specific offset explicitly).</p>
+            <p>Commit operation can be sync or async (callback function). Async commits requires some precaution for avoiding revert commits: e.g., commit of offset X fail while commit of X+y succeed. As a solution a strictly increasing number (a sequence number) can be used to detect if a failed commit should be retried (Kafka implements such behavior since 0.11).</p>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Kafka Reliability</h3>
+          <ul>
+            <li class="fragment">There is always <strong>tradeoffs</strong> between reliability and performance.</li>
+            <li class="fragment">Kafka is <strong>flexible</strong> enough to host reliable and non-reliable topics.</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3>Kafka Reliability</h3>
+          <ul>
+            <li class="fragment"><strong>Order guarantee</strong>: if the same producer writes A then B in the same partition, then offset(A) &gt; offset(B).</li>
+            <li class="fragment">Messages are considered <strong>committed</strong> when they are written to all in-sync replicas.
+              <ul>
+                <li class="fragment">Acknowledgements can be sent to producers when the message is committed (acks=all).</li>
+                <li class="fragment">Committed messages will never be lost if at least one replica remains alive.</li>
+                <li class="fragment">Only committed messages can be read by consumers.</li>
+              </ul>
+            </li>
+          </ul>
+          <aside class="notes">
+            <p>Committed implies written but not flushed to disk (if a replica fails before flushing, it will be removed from the list of in-sync replicas and catch up later).</p>
+            <p>More replicas increase reliability but reduce throughput. Given how the commit works, a slow but not out-of-sync replica can slow down the whole partition.</p>
+            <p>If there is a lot of out-of-sync replicas, reliability is impaired. We can configure Kafka to reject messages if there is not enough in-sync replicas.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Kafka Reliability - Replication</h3>
+          <ul>
+            <li class="fragment">With N replicas for a partition, N-1 brokers can be lost.
+              <ul>
+                <li>Tradeoff between availability and hardware resources.</li>
+              </ul>
+            </li>
+            <li class="fragment">A <strong>minimum number of in-sync replica </strong> can be configured for committing messages.
+              <ul>
+                <li>Tradeoff between availability and reliability.</li>
+              </ul>
+            </li>
+            <li class="fragment"><strong>Unclean election</strong> is disabled by default.
+              <ul>
+                <li>Tradeoff between availability and consistency.</li>
+              </ul>
+            </li>
+          </ul>
+          <aside class="notes">
+            <p>A reliable replication factor starts at 3. Some banking clusters uses a replication factor of 5. Placement is also important, each replicas should be stored on different brokers/racks.</p>
+            <p>If the minimum number of in-sync replicas (min.insync.replicas) is not matched, the leader will refuse messages (producers receives a NotEnoughReplicasException).</p>
+            <p>In an unclean election, the leader disappears but no in-sync replica exists. If unclean election is enabled (default before 0.11), there is potential data loss and inconsistencies. If unclean election is disabled (default since 0.11), the partition is not available until the original leader come back.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Kafka Reliability - Producer</h3>
+          <ul>
+            <li class="fragment">The <strong>acks</strong> parameter is a tradeoff between throughput and reliability.</li>
+            <li class="fragment"><strong>Automatic retries</strong> should be enabled for retriable errors.
+              <ul>
+                <li>The optimal number of retries depends on the application.</li>
+                <li>Be careful of potential duplicates.</li>
+              </ul>
+            </li>
+            <li class="fragment">Must deal with <strong>non-retriable errors</strong> (or unsuccessfully retried errors).</li>
+          </ul>
+          <aside class="notes">
+            <p>
+              acks=0 is very fast but not reliable<br />
+              acks=1 guarantees that the leader wrote the message, but the leader can crash before the followers store the message<br />
+              acks=all is the safest (and slowest) option for acknowledgment
+            </p>
+            <p>Setting acks=all and a minimum number of in-sync replica for commit is the safest configuration but can be slow.</p>
+            <p>Example of common retriable errors: <em>LeaderNotAvailableException</em> (election is running), <em>NotEnoughReplicasException</em> (occurs when the minimum number of in-sync replica for commit is not matched), <em>DisconnectException</em> (the server disconnected before request completion), etc.</p>
+            <p>There is a small chance that retries lead to duplicate messages. For handling this problem, your messages should include an unique id or make sure that the processing is idempotent.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Kafka Reliability - Consumer</h3>
+          <ul>
+            <li class="fragment">Data is available to consumer only if it has been written to all in-sync replicas (<strong>committed data</strong>).</li>
+            <li class="fragment">Consumers must keep tracks of the message they reads by storing the offset of the last messages read (<strong>committed offset</strong>).
+              <ul>
+                <li>Commit frequency is a tradeoff between reliability and performance.</li>
+              </ul>
+            </li>
+          </ul>
+          <aside class="notes">
+            <p>After a rebalance, consumers use the committed offsets to know at which point they need to start reading. If the offset does not exist anymore (because of retention policy), two strategies are available:</p>
+            <ul>
+              <li>earliest: the consumer starts from the beginning of the partition ⇨ minimizes data loss but some messages can be processed twice.</li>
+              <li>latest: the consumer starts at the end of the partition ⇨ minimizes duplicates but some messages can be missed.</li>
+            </ul>
+            <p>Committing has a performance overhead that can be alleviated by committing only every n messages. However, if the consumer crashes, messages could be processed twice.</p>
+            <p>In order to not miss messages when a consumer crashes, you should always commit offfsets for messages after processing (not after reading).</p>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Kafka Reliability - Consumer</h3>
+          <ul>
+            <li class="fragment">Consumers must <strong>handle rebalances</strong>.</li>
+            <li class="fragment">Consumers must <strong>handle long processing times</strong>.
+              <ul>
+                <li>Workers pool.</li>
+              </ul>
+            </li>
+            <li class="fragment">Consumers must <strong>deal with state</strong>.
+              <ul>
+                <li>Store state per offset in an external system.</li>
+              </ul>
+            </li>
+          </ul>
+          <aside class="notes">
+            <p>A consumer can listen for rebalances (ConsumerRebalanceListener#onPartitionsRevoked, ConsumerRebalanceListener#onPartitionsAssigned) and thus commits their offset when the partition is revoked and cleaning its state when a new partition is assigned.</p>
+            <p>After 0.10.1, the time between two poll() is limited (configurable) and consumers should be careful with long processing times. Worker pools are a common architecture to deal with this problem:</p>
+            <ul>
+              <li>read messages using poll()</li>
+              <li>send messages to a pool of thread for processing (e.g., java Executor)</li>
+              <li>call KafkaConsumer#pause() on the consumer (poll() will not return any data anymore)</li>
+              <li>call KafkaConsumer#resume() when all messages are processed by the thread pool</li>
+            </ul>
+            <p>Many consumers maintains some state that should be restored after rebalance. This problem requires to store the state into an external system supporting transactions (store the state and the offset in the same transaction). It can also be solved using the brand new transaction mechanism (&gt; 0.11).</p>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Kafka Reliability - Delivery Semantics</h3>
+          <ul>
+            <li class="fragment"><strong>At most once</strong>: read, commit, process.</li>
+            <li class="fragment"><strong>At least once</strong>: read, process, commit.</li>
+            <li class="fragment"><strong>Exactly once</strong> introduces several problems to solve:
+              <ul>
+                <li class="fragment">Deal with retry duplicates.</li>
+                <li class="fragment">Deal with rebalance duplicates.</li>
+              </ul>
+            </li>
+          </ul>
+          <aside class="notes">
+            <p>At most once: messages may be lost but are never duplicated. Read the messages, Save its position in the log, Process the messages. The consumer may crash after committing but before saving the processing result ⇨ some messages are lost after rebalance.</p>
+            <p>At least once: messages are never lost but may be duplicated. Read the messages, Process the messages, Commit its position in the log. The consumer may crash after processing but before committing ⇨ some messages are reprocessed after rebalance</p>
+            <p>Exactly once: each message is delivered once and only once:</p>
+            <ul>
+              <li>Retry duplicates (for retriable errors or lost acks) can be solved using idempotent producers (≥ 0.11), which guarantees that resending will not result in duplicate entries in the log (the broker assigns each producer an ID and deduplicates messages using a sequence number that is sent by the producer along with every message).</li>
+              <li>Rebalance duplicates can be solved with some tricks:
+                <ul>
+                  <li>idempotent writes: if the output store has unique key support, use unique identifiers for each records (or compose one from topic name, partition number and offset).</li>
+                  <li>external transactions: if the consumer writes its results into a store that has transaction support, use a single transaction to store the offset and the result. After the rebalance, use the last offset from the external store and restart the consumer from this offset.</li>
+                </ul>
+              </li>
+            </ul>
+            <p>Kafka transactions, that provides atomic read-process-write capabilities, can be used for dealing with rebalance duplicates when consumer sends their results to another topic. This allow developers to create complex computation worflows.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Kafka Reliability - Transactions</h3>
+          <ul>
+            <li class="fragment"><strong>Transactional producers</strong> can send data to multiple partitions atomically.
+              <ul>
+                <li><strong>Atomic read-process-write</strong> operation.</li>
+              </ul>
+            </li>
+            <li class="fragment">Transactional producers are identified by a user-defined <strong>transaction id</strong>.</li>
+            <li class="fragment">Transactions are managed by <strong>transaction controllers</strong>.
+              <ul>
+                <li>Manage the <strong>transaction log</strong> (also called <strong>transaction topic</strong>).</li>
+              </ul>
+            </li>
+          </ul>
+          <aside class="notes">
+            <p>Ability to consume, process and produce to different topics/partitions in a transaction ⇨ send a group of messages as a single transaction that either succeeds or fails atomically</p>
+            <p>At any given point in time, a producer can only have one ongoing transaction, so we can distinguish messages that belong to different transactions by their respective TransactionalId.</p>
+            <p>Brokers now include a transaction coordinator module that manages a specific replicated topic (transaction log). Every transactional.id is mapped to a specific partition of the transaction log through a simple hashing function ⇨ exactly one coordinator owns a given transactional.id.</p>
+            <p>A transaction coordinator maintains the following information in memory:</p>
+            <ul>
+              <li>a map of (TransactionalId, PID), a current epoch number (this ever-increasing number ensure that even if an old producer comes back to life, it will be ignored), a transaction timeout value.</li>
+              <li>a map of (PID, ongoing transaction status), the involvedtopic-partitions, the last time this status was updated. These in-memory mappings are persisted for recovery.</li>
+            </ul>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Kafka Reliability - Transactions</h3>
+          <pre><small><code class="java">
+            Properties producerProps = new Properties();
+            ...
+            producerProps.put("transaction.id", "aTransaction");
+            KafkaProducer&lt;String, String&gt; producer = new KafkaProducer&lt;&gt;(producerProps);
+            
+            Properties consumerProps = new Properties();
+            ...
+            props.put("group.id", "aGroup");
+            props.put("isolation.level", "read_committed");
+            KafkaConsumer&lt;String, String&gt; consumer = new KafkaConsumer&lt;&gt;(consumerProps);
+            
+            Map&lt;TopicPartition, OffsetAndMetadata&gt; offsets = new HashMap&lt;&gt;();
+            
+            
+            producer.initTransactions();                    
+          </code></small></pre>
+          <aside class="notes">
+            <p>initTransactions() ensures tgat any transactions initiated by previous instances of the producer (using the same transation id) are completed. If the previous instance had failed with a transaction in progress, it will be aborted. If the last transaction had begun completion, but not yet finished, this method awaits its completion.</p>
+          </aside>
+        </section>
+
+        <section>
+          <h3>Kafka Reliability - Transactions</h3>
+          <pre><small><code class="java">
+            while(true) {
+              ConsumerRecords&lt;String, String&gt; records = consumer.poll(200);
+              if (!records.isEmpty()) {
+                producer.beginTransaction();
+            
+                for (ConsumerRecord&lt;String, String&gt; record : records) {
+                  ProducerRecord&lt;String, String&gt; result = processRecord(record);
+                  producer.send(result);
+                  offsets.put(
+                    new TopicPartition(record.topic(), record.partition()), 
+                    new OffsetAndMetadata(record.offset() + 1));
+                }
+            
+                // similar to the commit of non-transactional producers
+                producer.sendOffsetsToTransaction(offsets, "aGroup");
+            
+                // if this does not report success, then the transaction will be rolled back.
+                producer.commitTransaction();
+              }
+            }         
+          </code></small></pre>
+          <aside class="notes">
+            <p>sendOffsetsToTransaction has a similar role than commitAsync with explicit offsets.</p>
+            <p>
+              When committing a transaction, the following steps will be executed by the coordinator:<br />
+              Send an WriteTxnMarkerRequest with the COMMIT marker to all the leaders of the transaction’s added partitions.<br />
+              When all the responses have been received, append a COMPLETE_COMMIT transaction message to the transaction topic. We do not need to wait for this record to be fully replicated since otherwise we will just redo this protocol again.
+            </p>
+            <p>
+              When aborting a transaction, the following steps will be executed by the coordinator:<br />
+              Send an WriteTxnMarkerRequest with the ABORT marker to all the host brokers of the transaction partitions.<br />
+              When all the responses have been received, append a COMPLETE_ABORT transaction message to the transaction topic. Do not need to wait for this record to be fully replicated since otherwise we will just redo this protocol again.
+            </p>
+          </aside>
+        </section>
+      </div>
+    </div>
+    <script src="highlightjs/highlight.pack.js"></script>
+    <script src="revealjs/js/reveal.js"></script>
+    <script>
+      Reveal.initialize({
+        slideNumber: 'c/t',
+        history: true,
+      });
+    </script>
+  </body>
+</html>
